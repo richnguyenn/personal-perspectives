@@ -58,40 +58,34 @@ def compute_metrics(predictions, val_samples):
     return metrics
 
 
-def save_mse_chart(all_metrics, output_path):
+def _bar_chart(all_metrics, key, title, ylabel, output_path):
     traits = personality_model.BIG_FIVE_TRAITS
     model_names = list(all_metrics.keys())
     x = np.arange(len(traits))
     width = 0.8 / len(model_names)
 
-    fig, axes = plt.subplots(1, 2, figsize=(16, 6))
-
+    fig, ax = plt.subplots(figsize=(10, 6))
     for i, model_name in enumerate(model_names):
-        metrics = all_metrics[model_name]
-        label = os.path.basename(model_name)
+        vals = [all_metrics[model_name][t][key] for t in traits]
         offset = (i - len(model_names) / 2 + 0.5) * width
+        ax.bar(x + offset, vals, width, label=os.path.basename(model_name))
 
-        mse_vals = [metrics[t]["mse"] for t in traits]
-        std_vals = [metrics[t]["pred_std"] for t in traits]
-
-        axes[0].bar(x + offset, mse_vals, width, label=label)
-        axes[1].bar(x + offset, std_vals, width, label=label)
-
-    trait_labels = [t.capitalize() for t in traits]
-    for ax, title, ylabel in [
-        (axes[0], "MSE per Trait (lower = better)", "MSE"),
-        (axes[1], "Prediction Std Dev per Trait (higher = better spread)", "Std Dev"),
-    ]:
-        ax.set_xticks(x)
-        ax.set_xticklabels(trait_labels)
-        ax.set_title(title)
-        ax.set_ylabel(ylabel)
-        ax.legend()
-
-    plt.suptitle("Model Evaluation on PANDORA Validation Set", fontsize=14)
+    ax.set_xticks(x)
+    ax.set_xticklabels([t.capitalize() for t in traits])
+    ax.set_title(title)
+    ax.set_ylabel(ylabel)
+    ax.legend()
     plt.tight_layout()
     plt.savefig(output_path, dpi=150)
     plt.close()
+
+
+def save_mse_chart(all_metrics, output_path):
+    _bar_chart(all_metrics, "mse", "MSE per Trait vs Ground Truth (lower = better)", "MSE", output_path)
+
+
+def save_std_chart(all_metrics, output_path):
+    _bar_chart(all_metrics, "pred_std", "Prediction Std Dev per Trait (higher = better spread)", "Std Dev", output_path)
 
 
 def save_pred_vs_label_chart(all_predictions, val_samples, output_path):
@@ -201,8 +195,11 @@ def main():
     with open(json_path, "w") as f:
         json.dump(all_metrics, f, indent=2)
 
-    chart_path = os.path.join(run_dir, "evaluation_chart.png")
-    save_mse_chart(all_metrics, chart_path)
+    mse_path = os.path.join(run_dir, "mse_per_trait.png")
+    save_mse_chart(all_metrics, mse_path)
+
+    std_path = os.path.join(run_dir, "std_dev_per_trait.png")
+    save_std_chart(all_metrics, std_path)
 
     scatter_path = os.path.join(run_dir, "pred_vs_true.png")
     save_pred_vs_label_chart(all_predictions, val_samples, scatter_path)
@@ -210,7 +207,8 @@ def main():
     print(f"\nSaved to: {run_dir}")
     print(f"  evaluation_results.csv")
     print(f"  evaluation_results.json")
-    print(f"  evaluation_chart.png  (MSE + std dev bar chart)")
+    print(f"  mse_per_trait.png     (MSE vs ground truth per trait)")
+    print(f"  std_dev_per_trait.png (prediction spread per trait)")
     print(f"  pred_vs_true.png      (scatter: predicted vs ground truth per trait)")
 
 

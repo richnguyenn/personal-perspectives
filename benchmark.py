@@ -46,39 +46,36 @@ def compute_stats(predictions):
     return stats
 
 
-def save_comparison_chart(all_stats, output_path):
+def _bar_chart(all_stats, key, title, ylabel, output_path, ylim_min=None):
     traits = [t.capitalize() for t in personality_model.BIG_FIVE_TRAITS]
     model_names = list(all_stats.keys())
     x = np.arange(len(traits))
     width = 0.8 / len(model_names)
 
-    fig, (ax_mean, ax_std) = plt.subplots(1, 2, figsize=(16, 6))
-
+    fig, ax = plt.subplots(figsize=(10, 6))
     for i, model_name in enumerate(model_names):
-        stats = all_stats[model_name]
-        means = [stats[t]["mean"] for t in personality_model.BIG_FIVE_TRAITS]
-        stds = [stats[t]["std"] for t in personality_model.BIG_FIVE_TRAITS]
+        vals = [all_stats[model_name][t][key] for t in personality_model.BIG_FIVE_TRAITS]
         offset = (i - len(model_names) / 2 + 0.5) * width
-        label = os.path.basename(model_name)
+        ax.bar(x + offset, vals, width, label=os.path.basename(model_name))
 
-        ax_mean.bar(x + offset, means, width, label=label)
-        ax_std.bar(x + offset, stds, width, label=label)
-
-    for ax, title, ylabel in [
-        (ax_mean, "Average Score per Trait", "Mean Score (0-1)"),
-        (ax_std, "Prediction Spread per Trait (Std Dev)", "Std Dev"),
-    ]:
-        ax.set_xticks(x)
-        ax.set_xticklabels(traits)
-        ax.set_title(title)
-        ax.set_ylabel(ylabel)
-        ax.legend()
-        ax.set_ylim(0, max(1.0, ax.get_ylim()[1]))
-
-    plt.suptitle("Model Benchmark Comparison", fontsize=14)
+    ax.set_xticks(x)
+    ax.set_xticklabels(traits)
+    ax.set_title(title)
+    ax.set_ylabel(ylabel)
+    ax.legend()
+    if ylim_min is not None:
+        ax.set_ylim(0, max(ylim_min, ax.get_ylim()[1]))
     plt.tight_layout()
     plt.savefig(output_path, dpi=150)
     plt.close()
+
+
+def save_avg_score_chart(all_stats, output_path):
+    _bar_chart(all_stats, "mean", "Average Sigmoid Score per Trait", "Mean Score (0-1)", output_path, ylim_min=1.0)
+
+
+def save_std_chart(all_stats, output_path):
+    _bar_chart(all_stats, "std", "Prediction Std Dev per Trait", "Std Dev", output_path)
 
 
 def main():
@@ -139,10 +136,13 @@ def main():
     pd.DataFrame(rows).to_csv(csv_path, index=False)
     print(f"\nSaved results to: {csv_path}")
 
-    # Save chart
-    chart_path = os.path.join(run_dir, "benchmark_chart.png")
-    save_comparison_chart(all_stats, chart_path)
-    print(f"Saved chart to:   {chart_path}")
+    avg_path = os.path.join(run_dir, "avg_score_per_trait.png")
+    save_avg_score_chart(all_stats, avg_path)
+    print(f"Saved chart to:   {avg_path}")
+
+    std_path = os.path.join(run_dir, "std_dev_per_trait.png")
+    save_std_chart(all_stats, std_path)
+    print(f"Saved chart to:   {std_path}")
 
 
 if __name__ == "__main__":
