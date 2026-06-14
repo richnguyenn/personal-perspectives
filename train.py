@@ -18,6 +18,7 @@ from transformers import (
 )
 
 import load_pandora
+import visualize
 from personality_model import BIG_FIVE_TRAITS
 
 
@@ -171,16 +172,18 @@ def main():
     train_dataset = BigFiveDataset(train_samples, tokenizer, max_length=args.max_length)
     val_dataset = BigFiveDataset(val_samples, tokenizer, max_length=args.max_length)
 
-    # Training arguments
+    steps_per_epoch = max(1, len(train_samples) // args.batch_size)
+    total_steps = steps_per_epoch * args.epochs
+    logging_steps = max(1, total_steps // 20)  # ~20 log points across the run
+
     training_args = TrainingArguments(
         output_dir=args.output_dir,
         num_train_epochs=args.epochs,
         per_device_train_batch_size=args.batch_size,
         per_device_eval_batch_size=args.batch_size,
-        warmup_ratio=0.1,
+        warmup_steps=max(1, total_steps // 10),
         weight_decay=0.01,
-        logging_dir=os.path.join(args.output_dir, "logs"),
-        logging_steps=50,
+        logging_steps=logging_steps,
         eval_strategy="epoch",
         save_strategy="epoch",
         seed=42,
@@ -201,6 +204,12 @@ def main():
     trainer.save_model(args.output_dir)
     tokenizer.save_pretrained(args.output_dir)
     print(f"Model saved to: {args.output_dir}")
+
+    # Plot train vs validation loss
+    loss_plot_path = os.path.join(args.output_dir, "loss_curve.png")
+    visualize.create_loss_plot(trainer.state.log_history, loss_plot_path)
+    print(f"Loss curve saved to: {loss_plot_path}")
+
     print("Run predictions with: python main.py --model", args.output_dir)
 
 

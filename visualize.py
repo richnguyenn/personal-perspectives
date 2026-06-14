@@ -74,6 +74,48 @@ def create_distribution_plots(results_list, output_path):
     plt.close()
 
 
+def create_loss_plot(log_history, output_path):
+    """Plot train and validation MSE loss curves from Trainer log history.
+
+    Parameters
+    ----------
+    log_history : list of dict
+        trainer.state.log_history from a HuggingFace Trainer run.
+    output_path : str
+        Path to save the PNG image.
+    """
+    train_steps, train_losses = [], []
+    val_epochs, val_losses = [], []
+
+    for entry in log_history:
+        if "loss" in entry:
+            train_steps.append(entry["step"])
+            train_losses.append(entry["loss"])
+        if "eval_loss" in entry:
+            val_epochs.append(entry["epoch"])
+            val_losses.append(entry["eval_loss"])
+
+    fig, ax = plt.subplots(figsize=(10, 6))
+
+    if train_steps:
+        ax.plot(train_steps, train_losses, label="Train MSE", color="steelblue")
+
+    if val_losses and train_steps:
+        # Map val epoch checkpoints onto the step axis for a shared x-axis
+        max_step = train_steps[-1]
+        total_epochs = log_history[-1].get("epoch", len(val_losses))
+        val_steps = [e / total_epochs * max_step for e in val_epochs]
+        ax.plot(val_steps, val_losses, label="Val MSE", color="tomato", marker="o", linestyle="--")
+
+    ax.set_xlabel("Step")
+    ax.set_ylabel("MSE Loss")
+    ax.set_title("Train vs Validation MSE Loss")
+    ax.legend()
+    plt.tight_layout()
+    plt.savefig(output_path, dpi=150)
+    plt.close()
+
+
 def create_radar_chart(scores_dict, output_path):
     """Create a radar (spider) chart for one comment's Big Five scores.
 
