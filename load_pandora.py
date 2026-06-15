@@ -103,3 +103,83 @@ def load_pandora_training_data(
 
     print(f"Built {len(samples)} training samples.")
     return samples
+
+
+def load_pandora_by_author(
+    pandora_dir,
+    max_comments_per_author=None,
+    min_comments_per_author=1,
+):
+    """Load PANDORA data grouped by author, for comment-level splitting.
+
+    Returns a dict keyed by author with their comments and Big Five labels,
+    so the caller can do an author-level train/val split before expanding
+    to individual comment samples (avoiding data leakage).
+
+    Returns
+    -------
+    dict
+        {author: {"comments": [str, ...], "labels": {trait: float, ...}}}
+    """
+    profiles_path = os.path.join(pandora_dir, "author_profiles.csv")
+    comments_path = os.path.join(pandora_dir, "all_comments_since_2015.csv")
+
+    if not os.path.exists(profiles_path):
+        raise FileNotFoundError(f"Author profiles not found: {profiles_path}")
+    if not os.path.exists(comments_path):
+        raise FileNotFoundError(f"Comments file not found: {comments_path}")
+
+    print("Loading author profiles...")
+    profiles = pd.read_csv(profiles_path)
+    valid_profiles = profiles.dropna(subset=BIG_FIVE_COLS)
+    valid_authors = set(valid_profiles["author"].tolist())
+    print(f"Found {len(valid_authors)} authors with Big Five labels.")
+
+    print("Loading comments (chunked)...")
+    author_comments = defaultdict(list)
+    chunk_size = 50000
+
+    for chunk in pd.read_csv(comments_path, chunksize=chunk_size, usecols=["author", "body"]):
+        chunk = chunk[chunk["author"].isin(valid_authors)]
+        for _, row in chunk.iterrows():
+            author = row["author"]
+            body = row["body"]
+            if pd.isna(body) or str(body).strip() == "":
+                continue
+            if max_comments_per_author is not None:
+                if len(author_comments[author]) >= max_comments_per_author:
+                    continue
+            author_comments[author].append(str(body).strip())
+
+    profiles_by_author = valid_profiles.set_index("author")
+    author_data = {}
+
+    for author in valid_authors:
+        comments = author_comments.get(author, [])
+        if len(comments) < min_comments_per_author:
+            continue
+        row = profiles_by_author.loc[author]
+        author_data[author] = {
+            "comments": comments,
+            "labels": {
+                "openness": float(row["openness"]) / 100.0,
+                "conscientiousness": float(row["conscientiousness"]) / 100.0,
+                "extraversion": float(row["extraversion"]) / 100.0,
+                "agreeableness": float(row["agreeableness"]) / 100.0,
+                "neuroticism": float(row["neuroticism"]) / 100.0,
+            },
+        }
+
+    print(f"Loaded {len(author_data)} authors.")
+    return author_data
+
+
+def expand_to_comment_samples(author_data):
+    """Expand author_data dict into a flat list of per-comment samples."""
+    samples = []
+    for author, data in author_data.items():
+        for comment in data["comments"]:
+            sample = {"text": comment, "author": author}
+            sample.update(data["labels"])
+            samples.append(sample)
+    return samples

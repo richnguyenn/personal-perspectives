@@ -140,25 +140,44 @@ def main():
         default=None,
         help="Limit number of training samples (for testing)",
     )
+    parser.add_argument(
+        "--comment_level",
+        action="store_true",
+        help="Train on individual comments instead of aggregated user text. "
+             "Split is done by author to avoid data leakage.",
+    )
     args = parser.parse_args()
 
     # Load PANDORA data
-    samples = load_pandora.load_pandora_training_data(
-        pandora_dir=args.pandora_dir,
-        max_comments_per_author=args.max_comments_per_author,
-        min_comments_per_author=1,
-        limit_samples=args.limit_samples,
-    )
-
-    if len(samples) == 0:
-        print("No training samples. Exiting.")
-        return
-
-    # Train/val split (by sample, not by author - for simplicity; author-level split would need more logic)
-    train_samples, val_samples = train_test_split(
-        samples, test_size=args.val_split, random_state=42
-    )
-    print(f"Train samples: {len(train_samples)}, Val samples: {len(val_samples)}")
+    if args.comment_level:
+        author_data = load_pandora.load_pandora_by_author(
+            pandora_dir=args.pandora_dir,
+            max_comments_per_author=args.max_comments_per_author,
+            min_comments_per_author=1,
+        )
+        # Author-level split to prevent leakage, then expand to comments
+        authors = list(author_data.keys())
+        train_authors, val_authors = train_test_split(authors, test_size=args.val_split, random_state=42)
+        train_author_data = {a: author_data[a] for a in train_authors}
+        val_author_data = {a: author_data[a] for a in val_authors}
+        train_samples = load_pandora.expand_to_comment_samples(train_author_data)
+        val_samples = load_pandora.expand_to_comment_samples(val_author_data)
+        if args.limit_samples:
+            train_samples = train_samples[:args.limit_samples]
+        print(f"Comment-level: {len(train_authors)} train authors → {len(train_samples)} comments")
+        print(f"Comment-level: {len(val_authors)} val authors   → {len(val_samples)} comments")
+    else:
+        samples = load_pandora.load_pandora_training_data(
+            pandora_dir=args.pandora_dir,
+            max_comments_per_author=args.max_comments_per_author,
+            min_comments_per_author=1,
+            limit_samples=args.limit_samples,
+        )
+        if len(samples) == 0:
+            print("No training samples. Exiting.")
+            return
+        train_samples, val_samples = train_test_split(samples, test_size=args.val_split, random_state=42)
+        print(f"User-level: {len(train_samples)} train authors, {len(val_samples)} val authors")
 
     # Load tokenizer and model
     print(f"Loading model: {args.base_model}")
