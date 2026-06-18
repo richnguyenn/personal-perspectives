@@ -39,6 +39,43 @@ def run_predictions(model_name, texts, batch_size=32):
     return predictions
 
 
+def run_predictions_comment_level(model_name, val_author_data, val_samples, batch_size=32):
+    """Predict on individual comments then average per author to get user-level scores.
+
+    val_author_data maps author -> {comments, labels} for val authors only.
+    val_samples is used to preserve ordering so metrics align with labels.
+    """
+    predictor = personality_model.PersonalityPredictor(model_name=model_name)
+
+    # Build flat list of (author, comment) preserving author order from val_samples
+    author_order = [s["author"] for s in val_samples]
+    all_texts = []
+    text_author_map = []
+    for author in author_order:
+        comments = val_author_data[author]["comments"]
+        all_texts.extend(comments)
+        text_author_map.extend([author] * len(comments))
+
+    # Predict on all comments in batches
+    flat_preds = []
+    for i in tqdm(range(0, len(all_texts), batch_size), desc="  Predicting (comment-level)", leave=False):
+        flat_preds.extend(predictor.predict_batch(all_texts[i : i + batch_size]))
+
+    # Average predictions per author
+    from collections import defaultdict
+    author_preds = defaultdict(list)
+    for author, pred in zip(text_author_map, flat_preds):
+        author_preds[author].append(pred)
+
+    averaged = []
+    for author in author_order:
+        preds = author_preds[author]
+        avg = {trait: float(np.mean([p[trait] for p in preds])) for trait in personality_model.BIG_FIVE_TRAITS}
+        averaged.append(avg)
+
+    return averaged
+
+
 def compute_metrics(predictions, val_samples):
     traits = personality_model.BIG_FIVE_TRAITS
     metrics = {}
@@ -119,6 +156,8 @@ def save_pred_vs_label_chart(all_predictions, val_samples, output_path):
 def main():
     parser = argparse.ArgumentParser(description="Evaluate models on PANDORA validation set")
     parser.add_argument("--models", nargs="+", default=DEFAULT_MODELS)
+    parser.add_argument("--comment_level_models", nargs="+", default=["models/roberta-pandora-comment-level"],
+                        help="Models trained at comment level — evaluated by predicting per comment then averaging per author")
     parser.add_argument("--pandora_dir", type=str, default="data/pandora")
     parser.add_argument("--output_dir", type=str, default="results/evaluation")
     parser.add_argument("--max_comments_per_author", type=int, default=50)
@@ -126,19 +165,49 @@ def main():
     parser.add_argument("--batch_size", type=int, default=32)
     args = parser.parse_args()
 
+    comment_level_set = set(args.comment_level_models or [])
+
     timestamp = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
     run_dir = os.path.join(args.output_dir, timestamp)
     os.makedirs(run_dir, exist_ok=True)
 
-    # Reproduce exact val split from training
-    print("Loading PANDORA data...")
+    # Reproduce exact val split from training (user-level)
+    print("Loading PANDORA data (user-level)...")
     samples = load_pandora.load_pandora_training_data(
         pandora_dir=args.pandora_dir,
         max_comments_per_author=args.max_comments_per_author,
         min_comments_per_author=1,
     )
     _, val_samples = train_test_split(samples, test_size=args.val_split, random_state=42)
-    print(f"Validation set: {len(val_samples)} authors\n")
+    print(f"Validation set: {len(val_samples)} authors")
+
+    # Load comment-level val data if any comment-level models are being evaluated
+    val_author_data = None
+    if any(m in comment_level_set for m in args.models):
+        print("Loading PANDORA data (comment-level for comment-level models)...")
+        all_author_data = load_pandora.load_pandora_by_author(
+            pandora_dir=args.pandora_dir,
+            max_comments_per_author=args.max_comments_per_author,
+            min_comments_per_author=1,
+        )
+        # Same author-level split with same seed as train.py
+        authors = list(all_author_data.keys())
+        _, val_authors = train_test_split(authors, test_size=args.val_split, random_state=42)
+        val_author_data = {a: all_author_data[a] for a in val_authors}
+        # Add author key to val_samples so run_predictions_comment_level can look them up
+        val_author_set = set(val_authors)
+        for s in val_samples:
+            # Match by labels since author isn't stored in user-level samples
+            pass
+        # Rebuild val_samples with author info from the author-level split
+        val_samples_with_author = []
+        for author in val_authors:
+            d = val_author_data[author]
+            sample = {"author": author, "text": " ".join(d["comments"])}
+            sample.update(d["labels"])
+            val_samples_with_author.append(sample)
+        val_samples = val_samples_with_author
+        print(f"Comment-level val: {len(val_samples)} authors\n")
 
     texts = [s["text"] for s in val_samples]
 
@@ -147,7 +216,11 @@ def main():
 
     for model_name in args.models:
         print(f"Running: {model_name}")
-        preds = run_predictions(model_name, texts, batch_size=args.batch_size)
+        if model_name in comment_level_set and val_author_data is not None:
+            print("  (comment-level evaluation: predict per comment, average per author)")
+            preds = run_predictions_comment_level(model_name, val_author_data, val_samples, batch_size=args.batch_size)
+        else:
+            preds = run_predictions(model_name, texts, batch_size=args.batch_size)
         all_predictions[model_name] = preds
         all_metrics[model_name] = compute_metrics(preds, val_samples)
 
