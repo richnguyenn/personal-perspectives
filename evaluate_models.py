@@ -76,6 +76,32 @@ def run_predictions_comment_level(model_name, val_author_data, val_samples, batc
     return averaged
 
 
+def _pearson(preds, labels):
+    """Pearson correlation, guarding against zero-variance predictions.
+
+    A collapsed model that predicts a near-constant value has ~zero variance,
+    which makes correlation undefined (0/0 -> nan). Return 0.0 in that case,
+    since a constant predictor has no linear relationship with the labels.
+    """
+    if np.std(preds) < 1e-8 or np.std(labels) < 1e-8:
+        return 0.0
+    return float(np.corrcoef(preds, labels)[0, 1])
+
+
+def _r2(preds, labels):
+    """Coefficient of determination against the mean baseline.
+
+    R2 = 1 - SS_res / SS_tot, where SS_tot uses the label mean as the
+    reference prediction. R2 <= 0 means the model does no better than (or
+    worse than) simply predicting the mean of the labels.
+    """
+    ss_res = float(np.sum((labels - preds) ** 2))
+    ss_tot = float(np.sum((labels - np.mean(labels)) ** 2))
+    if ss_tot < 1e-12:
+        return 0.0
+    return 1.0 - ss_res / ss_tot
+
+
 def compute_metrics(predictions, val_samples):
     traits = personality_model.BIG_FIVE_TRAITS
     metrics = {}
@@ -85,6 +111,8 @@ def compute_metrics(predictions, val_samples):
         metrics[trait] = {
             "mse": float(np.mean((preds - labels) ** 2)),
             "mae": float(np.mean(np.abs(preds - labels))),
+            "pearson": _pearson(preds, labels),
+            "r2": _r2(preds, labels),
             "pred_mean": float(np.mean(preds)),
             "pred_std": float(np.std(preds)),
             "label_mean": float(np.mean(labels)),
@@ -92,6 +120,8 @@ def compute_metrics(predictions, val_samples):
         }
     metrics["overall_mse"] = float(np.mean([metrics[t]["mse"] for t in traits]))
     metrics["overall_mae"] = float(np.mean([metrics[t]["mae"] for t in traits]))
+    metrics["overall_pearson"] = float(np.mean([metrics[t]["pearson"] for t in traits]))
+    metrics["overall_r2"] = float(np.mean([metrics[t]["r2"] for t in traits]))
     return metrics
 
 
@@ -238,6 +268,24 @@ def main():
         print(row)
     print(f"{'Overall MSE':<22}" + "".join(f"{all_metrics[m]['overall_mse']:>{col_w}.4f}" for m in args.models))
 
+    print(f"\n=== Pearson r per Trait (higher = better; 0 = no signal) ===")
+    print(f"{'Trait':<22}" + "".join(f"{l:>{col_w}}" for l in model_labels))
+    print("-" * (22 + col_w * len(args.models)))
+    for trait in traits:
+        row = f"{trait.capitalize():<22}"
+        row += "".join(f"{all_metrics[m][trait]['pearson']:>{col_w}.4f}" for m in args.models)
+        print(row)
+    print(f"{'Overall Pearson':<22}" + "".join(f"{all_metrics[m]['overall_pearson']:>{col_w}.4f}" for m in args.models))
+
+    print(f"\n=== R2 per Trait (vs mean baseline; <= 0 = no better than the mean) ===")
+    print(f"{'Trait':<22}" + "".join(f"{l:>{col_w}}" for l in model_labels))
+    print("-" * (22 + col_w * len(args.models)))
+    for trait in traits:
+        row = f"{trait.capitalize():<22}"
+        row += "".join(f"{all_metrics[m][trait]['r2']:>{col_w}.4f}" for m in args.models)
+        print(row)
+    print(f"{'Overall R2':<22}" + "".join(f"{all_metrics[m]['overall_r2']:>{col_w}.4f}" for m in args.models))
+
     print(f"\n=== Prediction Std Dev per Trait ===")
     print(f"{'Trait':<22}" + "".join(f"{l:>{col_w}}" for l in model_labels))
     print("-" * (22 + col_w * len(args.models)))
@@ -260,6 +308,8 @@ def main():
             "trait": "overall",
             "mse": metrics["overall_mse"],
             "mae": metrics["overall_mae"],
+            "pearson": metrics["overall_pearson"],
+            "r2": metrics["overall_r2"],
         })
     csv_path = os.path.join(run_dir, "evaluation_results.csv")
     pd.DataFrame(rows).to_csv(csv_path, index=False)

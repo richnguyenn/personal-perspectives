@@ -16,7 +16,7 @@ BIG_FIVE_TRAITS = ["openness", "conscientiousness", "extraversion", "agreeablene
 class PersonalityPredictor:
     """Predicts Big Five personality traits from text using a transformer model."""
 
-    def __init__(self, model_name, device=None):
+    def __init__(self, model_name, device=None, output_activation="sigmoid"):
         """Initialize the predictor with a model.
 
         Parameters
@@ -26,8 +26,22 @@ class PersonalityPredictor:
             or "roberta-base").
         device : str or torch.device, optional
             Device to run the model on. If None, uses CUDA if available else CPU.
+        output_activation : str, optional
+            How to map raw logits to the reported 0-1 scores:
+              - "sigmoid" (default): apply torch.sigmoid. Correct only when the
+                model was TRAINED with a sigmoid (e.g. the essay-trained
+                vladinc baseline).
+              - "clip": clamp raw logits to [0, 1]. Correct for the PANDORA
+                fine-tunes, which regress raw logits directly onto [0, 1]
+                targets (train.py uses MSE(logits, labels) with no sigmoid).
+                Applying sigmoid to those inflates every trait toward ~0.6.
+              - "raw": return raw logits unchanged (used to compute several
+                activations from a single forward pass).
         """
         self.model_name = model_name
+        if output_activation not in ("sigmoid", "clip", "raw"):
+            raise ValueError(f"Unknown output_activation: {output_activation}")
+        self.output_activation = output_activation
         if device is None:
             self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
         else:
@@ -138,8 +152,13 @@ class PersonalityPredictor:
                 outputs = self.model(**inputs)
                 logits = outputs.logits
 
-            # Apply sigmoid to get values between 0 and 1
-            scores = torch.sigmoid(logits)
+            # Map raw logits to reported scores per the configured activation.
+            if self.output_activation == "sigmoid":
+                scores = torch.sigmoid(logits)
+            elif self.output_activation == "clip":
+                scores = torch.clamp(logits, 0.0, 1.0)
+            else:  # "raw"
+                scores = logits
 
         # Build results for valid texts
         valid_results = []
